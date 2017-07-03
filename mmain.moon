@@ -41,9 +41,22 @@ Entity = (components) ->
 
     return components
 
+Weapon = Entity {
+    'weapon'
+    shoot_time: 0
+    down: (dt) =>
+        @shoot_time += dt
+        if @shoot_time >= @fire_rate
+            @shoot @world, @owner
+            @shoot_time -= @fire_rate
+}
+
 Bullet = Entity {
     'bullet'
     'die_in_top_of_screen'
+}
+
+NormalBullet = Bullet {
     power: 20
     position: Vector lg.getWidth! / 2, lg.getHeight! / 2
     velocity: Vector 0, 0
@@ -53,9 +66,7 @@ Bullet = Entity {
         lg.circle 'fill', @position.x, @position.y, 8
 }
 
-SineBullet = Entity {
-    'bullet'
-    'die_in_top_of_screen'
+SineBullet = Bullet {
     power: 20
     position: Vector lg.getWidth! / 2, lg.getHeight! / 2
     velocity: Vector 0, 0
@@ -64,35 +75,23 @@ SineBullet = Entity {
     draw: =>
         lg.setColor WHITE
         lg.circle 'fill', @position.x, @position.y, 8
-
 }
 
-Weapon = (table) ->
-    weapon = Entity table
-    assert weapon.fire_rate or weapon.shoot, 'Invalid weapon entity'
-    weapon.shoot_time = 0
-    weapon.down = (world, entity, dt) ->
-        weapon.shoot_time += dt
-        if weapon.shoot_time >= weapon.fire_rate
-            weapon.shoot world, entity
-            weapon.shoot_time -= weapon.fire_rate
-    return weapon
-
 WeakWeapon = Weapon {
-    fire_rate: 0.05
-    shoot: (world, entity) ->
-        world\addEntity Bullet position: entity.position\clone!, velocity: Vector 0, -1000
+    fire_rate: 0.1
+    shoot: (world, entity) =>
+        world\addEntity NormalBullet position: entity.position\clone!, velocity: Vector 0, -1000
 }
 
 SineWeapon = Weapon {
-    fire_rate: 0.01
-    shoot: (world, entity) ->
+    fire_rate: 0.1
+    shoot: (world, entity) =>
         world\addEntity SineBullet position: entity.position\clone!, velocity: Vector 0, -500
 }
 
 DoubleSineWeapon = Weapon {
-    fire_rate: 0.05
-    shoot: (world, entity) ->
+    fire_rate: 0.1
+    shoot: (world, entity) =>
         world\addEntity SineBullet position: entity.position\clone!, velocity: Vector 0, -500
         (world\addEntity SineBullet position: entity.position\clone!, velocity: Vector 0, -500).sine_movement.antiphase = true
 }
@@ -113,9 +112,8 @@ Player = Entity {
     'is_handles_input'
     'only_on_screen'
     'player'
-    'collectable'
     is_need_to_shoot: false
-    weapon_set: {WeakWeapon!, SineWeapon!}
+    weapon_set: {WeakWeapon!}
     last_shoot_time: 0
 }
 
@@ -154,6 +152,7 @@ EnemySpawner = Entity {
 getRandomTopPosition = -> Vector (random 20, lg.getWidth! - 20), -50
 
 systems = {}
+
 systems.collider_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'position', 'bounding_box'
     .onAdd = (e) => collider\add e, e.position.x, e.position.y, e.bounding_box.w, e.bounding_box.h
@@ -168,6 +167,15 @@ systems.enemy_collider_system = with ECS.processingSystem!
             if c.other.bullet
                 e.hp -= c.other.power
                 world\removeEntity c.other
+
+systems.weapon_set_manage_system = with ECS.processingSystem!
+    .filter = ECS.requireAll 'weapon_set'
+    .process = (e) =>
+        for weapon in *e.weapon_set
+            weapon.owner = e
+            weapon.world = @world
+            @world\addEntity weapon if not @world[weapon] -- Don't know is it really works.
+    .onRemove = (e) => @world\removeEntity weapon for weapon in *e.weapon_set
 
 systems.collectable_collider_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'player'
@@ -188,9 +196,10 @@ systems.moving_system = with ECS.processingSystem!
 systems.sine_moving_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'sine_movement'
     .onAdd = (e) => e.origin_x = e.position.x
-    .process = (e) =>
+    .process = (e, dt) =>
         sign = e.sine_movement.antiphase and -1 or 1
-        x_offset = sign * e.sine_movement.amplitude * math.sin(math.pi * e.existing_time / e.sine_movement.period)
+        x_start_offset = e.sine_movement.start_offset or 0
+        x_offset = sign * e.sine_movement.amplitude * math.sin(x_start_offset + math.pi * e.existing_time / e.sine_movement.period)
         e.position.x = e.origin_x + x_offset
 
 systems.collectable_moving_system = with ECS.processingSystem!
@@ -228,15 +237,6 @@ systems.die_outside_of_screen_system = with ECS.processingSystem!
            e.die_in_bottom_of_screen and e.position.y > lg.getHeight!
             @world\removeEntity e
 
--- systems.shooting_system = with ECS.processingSystem!
---     .filter = ECS.requireAll 'is_need_to_shoot'
---     .process = (e, dt) =>
---         if e.is_need_to_shoot
---             weapon @world, e, dt for weapon in *e.weapon_set
---             e.is_need_to_shoot = false
---             e.last_shoot_time = 0 if e.last_shoot_time
---         e.last_shoot_time += dt if e.last_shoot_time
-
 systems.input_movement_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'is_handles_input', 'position', 'velocity', 'speed'
     .process = (e, dt) =>
@@ -250,13 +250,13 @@ systems.input_movement_system = with ECS.processingSystem!
 systems.input_shoot_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'is_handles_input', 'is_need_to_shoot'
     .process = (e, dt) =>
-        -- e.is_need_to_shoot = true if input\pressRepeat 'shoot', 0.1
-        -- if e.is_need_to_shoot
         if input\down 'shoot'
-            weapon.down @world, e, dt for weapon in *e.weapon_set
-            -- e.is_need_to_shoot = false
+            weapon\down dt for weapon in *e.weapon_set
             e.last_shoot_time = 0 if e.last_shoot_time
         e.last_shoot_time += dt if e.last_shoot_time
+
+        if input\pressed 'debug_key'
+            e.weapon_set[#e.weapon_set + 1] = SineWeapon!
 
 systems.draw_system = with ECS.processingSystem!
     .is_draw_system = true
@@ -264,7 +264,7 @@ systems.draw_system = with ECS.processingSystem!
     .process = (e) => e\draw!
 
 systems.update_timer_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'timer'
+    .filter = ECS.requireAny 'timer', 'existing_time'
     .process = (e, dt) =>
         e.timer\update dt
         e.existing_time += dt
@@ -326,6 +326,7 @@ initInput = ->
 
         \bind 'space', 'shoot'
         \bind 'z', 'shoot'
+        \bind 'x', 'debug_key'
 
         \bind 'f1', 'toggle_debug'
         \bind 'f2', 'collect_garbage'
