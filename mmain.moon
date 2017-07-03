@@ -70,7 +70,7 @@ SineBullet = Bullet {
     power: 20
     position: Vector lg.getWidth! / 2, lg.getHeight! / 2
     velocity: Vector 0, 0
-    sine_movement: amplitude: 60, period: 0.2
+    sine_movement: amplitude: 80, period: 0.2
     bounding_box: w:10, h:10
     draw: =>
         lg.setColor WHITE
@@ -78,9 +78,16 @@ SineBullet = Bullet {
 }
 
 WeakWeapon = Weapon {
-    fire_rate: 0.1
+    fire_rate: 0.05
     shoot: (world, entity) =>
         world\addEntity NormalBullet position: entity.position\clone!, velocity: Vector 0, -1000
+}
+
+DoubleAngleWeapon = Weapon {
+    fire_rate: 0.1
+    shoot: (world, entity) =>
+        world\addEntity NormalBullet position: entity.position\clone!, velocity: (Vector 0, -1000)\rotateInplace -0.4
+        world\addEntity NormalBullet position: entity.position\clone!, velocity: (Vector 0, -1000)\rotateInplace 0.4
 }
 
 SineWeapon = Weapon {
@@ -90,7 +97,7 @@ SineWeapon = Weapon {
 }
 
 DoubleSineWeapon = Weapon {
-    fire_rate: 0.1
+    fire_rate: 0.4
     shoot: (world, entity) =>
         world\addEntity SineBullet position: entity.position\clone!, velocity: Vector 0, -500
         (world\addEntity SineBullet position: entity.position\clone!, velocity: Vector 0, -500).sine_movement.antiphase = true
@@ -105,15 +112,16 @@ Player = Entity {
     bounding_box: w:16, h:32
     speed: 500
     draw: =>
-        lg.setColor GREEN
-        lg.polygon 'fill', @position.x, @position.y - 30,
-                           @position.x + 20, @position.y + 30,
-                           @position.x - 20, @position.y + 30
+        -- lg.setColor GREEN
+        -- lg.polygon 'fill', @position.x, @position.y - 30,
+        --                    @position.x + 20, @position.y + 30,
+        --                    @position.x - 20, @position.y + 30
+        lg.setColor WHITE
+        lg.draw ship_image, @position.x - ship_image\getWidth! - 15, @position.y, 0, 4, 4
     'is_handles_input'
     'only_on_screen'
     'player'
-    is_need_to_shoot: false
-    weapon_set: {WeakWeapon!}
+    weapon_set: {WeakWeapon!, DoubleAngleWeapon!}
     last_shoot_time: 0
 }
 
@@ -248,15 +256,15 @@ systems.input_movement_system = with ECS.processingSystem!
             .y += e.speed if input\down 'down'
 
 systems.input_shoot_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'is_handles_input', 'is_need_to_shoot'
+    .filter = ECS.requireAll 'is_handles_input', 'weapon_set'
     .process = (e, dt) =>
         if input\down 'shoot'
             weapon\down dt for weapon in *e.weapon_set
             e.last_shoot_time = 0 if e.last_shoot_time
         e.last_shoot_time += dt if e.last_shoot_time
 
-        if input\pressed 'debug_key'
-            e.weapon_set[#e.weapon_set + 1] = SineWeapon!
+        if input\pressed 'debug_key_1' then e.weapon_set[#e.weapon_set + 1] = SineWeapon!
+        if input\pressed 'debug_key_2' then e.weapon_set[#e.weapon_set + 1] = DoubleSineWeapon!
 
 systems.draw_system = with ECS.processingSystem!
     .is_draw_system = true
@@ -326,7 +334,8 @@ initInput = ->
 
         \bind 'space', 'shoot'
         \bind 'z', 'shoot'
-        \bind 'x', 'debug_key'
+        \bind 'x', 'debug_key_1'
+        \bind 'c', 'debug_key_2'
 
         \bind 'f1', 'toggle_debug'
         \bind 'f2', 'collect_garbage'
@@ -344,6 +353,9 @@ love.load = ->
     export input = initInput!
 
     export global_timer = Timer!
+
+    export ship_image = lg.newImage 'test_ship.png'
+    ship_image\setFilter 'nearest'
 
     intiDebugGraphs!
 
