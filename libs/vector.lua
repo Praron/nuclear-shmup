@@ -157,6 +157,10 @@ function vector:moveInplace(dx, dy)
     return self
 end
 
+function vector:moved(dx, dy)
+    return self:clone():moveInplace(dx, xy)
+end
+
 function vector:perpendicular()
     return new(-self.y, self.x)
 end

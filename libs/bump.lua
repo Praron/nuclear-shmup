@@ -733,6 +733,11 @@ function World:check(item, goalX, goalY, filter)
   return goalX, goalY, cols, len
 end
 
+function World:getCollisions(item, goalX, goalY, filter)
+  _, _, cols, len = self:check(item, goalX, goalY, filter)
+  return cols, len
+end
+
 
 -- Public library functions
 
