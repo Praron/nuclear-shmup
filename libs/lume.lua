@@ -129,12 +129,12 @@ function lume.random(a, b)
 end
 
 
-function lume.randomchoice(t)
+function lume.randomChoice(t)
   return t[math.random(#t)]
 end
 
 
-function lume.weightedchoice(t)
+function lume.weightedChoice(t)
   local sum = 0
   for _, v in pairs(t) do
     assert(v >= 0, "weight value less than zero")

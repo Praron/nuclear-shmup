@@ -11,19 +11,24 @@ Vector = require 'libs/vector'
 Bump = require 'libs/bump'
 DebugGraph = require 'libs/debug_graph'
 BumpDebug = require 'libs/bump_debug'
+Observer = require 'libs/talkback'
 
 Utils = require 'libs/utils'
+
+Talk = Observer.new!
+
+{graphics: lg, math: lm} = love
 
 setmetatable _G, __index: require('libs/cargo').init
     dir: 'assets'
     processors:
-        ['images/']: (image, filename) ->
+        ['images/']: (image, file_name) ->
             image\setFilter 'nearest'
-
-{graphics: lg, math: lm} = love
 
 export DEBUG = true
 
+export SCREEN_X0 = 0
+export SCREEN_Y0 = 0
 export SCREEN_W = 150
 export SCREEN_H = 200
 
@@ -33,6 +38,9 @@ GREEN = {106, 190, 48}
 RED = {172, 50, 50}
 DARK_BLUE = {34, 32, 52}
 
+tableToArray = (t) -> [v for k, v in pairs t]
+
+getCenterPosition = -> Vector SCREEN_W / 2, SCREEN_H / 2
 
 Entity = (components) ->
     for i = 1, #components
@@ -49,16 +57,38 @@ Entity = (components) ->
     components.timer = Timer!
     components.existing_time = 0
 
+    components.getCenter = =>
+        if @bounding_box then return @position + Vector @bounding_box.w / 2, @bounding_box.h / 2
+        else return @position\clone!
+
     return components
 
 Weapon = Entity {
     'weapon'
+    name: 'unnamed weapon'
     shoot_time: 0
     down: (dt) =>
         @shoot_time += dt
         if @shoot_time >= @fire_rate
             @shoot @world, @owner
             @shoot_time -= @fire_rate
+}
+
+WeaponPickup = Entity {
+    'weapon_pickup'
+    position: getCenterPosition!
+    velocity: Vector 0, 30
+    bounding_box: w: 9, h: 9
+    weapon: nil
+    draw: =>
+        assert @weapon, 'Invalid WeaponPickup instance, need weapon.'
+
+        lg.setColor WHITE
+        lg.setLineWidth 0.5
+        lg.polygon 'line', @position.x + @bounding_box.w / 2, @position.y, @position.x + @bounding_box.w, @position.y + @bounding_box.h / 2,
+                           @position.x + @bounding_box.w / 2, @position.y + @bounding_box.h, @position.x, @position.y + @bounding_box.h / 2
+        lg.setLineWidth 1
+        lg.rectangle 'line', @position.x, @position.y, @bounding_box.w, @bounding_box.h
 }
 
 Bullet = Entity {
@@ -69,48 +99,55 @@ Bullet = Entity {
 NormalBullet = Bullet {
     power: 20
     position: Vector SCREEN_W / 2, SCREEN_H / 2
-    velocity: Vector 0, 0
+    velocity: Vector 0, -300
     bounding_box: w:3, h:3
     draw: =>
         lg.setColor WHITE
-        -- lg.circle 'fill', @position.x, @position.y, 8
-        lg.circle 'fill', @position.x, @position.y, 2
+        lg.circle 'fill', @position.x + 1.5, @position.y + 1.5, 2
 }
 
 SineBullet = NormalBullet {
+    velocity: Vector 0, -200
     sine_movement: amplitude: 10, period: 0.1
 }
 
 getShootPoint = (entity) -> (entity.position + (entity.shoot_point or Vector.zero))\clone!
 
-WeakWeapon = Weapon {
+weapons = {}
+
+weapons.Weak = Weapon {
+    name: 'weak'
     fire_rate: 0.15
     shoot: (world, entity) =>
-        world\addEntity NormalBullet position: getShootPoint(entity), velocity: Vector 0, -300
+        world\addEntity NormalBullet position: getShootPoint(entity)
 }
 
-DoubleAngleWeapon = Weapon {
+weapons.DoubleAngle = Weapon {
+    name: 'double angle'
     fire_rate: 0.1
     shoot: (world, entity) =>
-        world\addEntity NormalBullet position: getShootPoint(entity), velocity: (Vector 0, -300)\rotateInplace -0.4
-        world\addEntity NormalBullet position: getShootPoint(entity), velocity: (Vector 0, -300)\rotateInplace 0.4
+        world\addEntity NormalBullet position: getShootPoint(entity), velocity: NormalBullet.velocity\rotated -0.4
+        world\addEntity NormalBullet position: getShootPoint(entity), velocity: NormalBullet.velocity\rotated 0.4
 }
 
-SineWeapon = Weapon {
+weapons.Sine = Weapon {
+    name: 'sine'
     fire_rate: 0.15
     shoot: (world, entity) =>
-        world\addEntity SineBullet position: getShootPoint(entity), velocity: Vector 0, -200
+        world\addEntity SineBullet position: getShootPoint(entity)
 }
 
-DoubleSineWeapon = Weapon {
+weapons.DoubleSine = Weapon {
+    name: 'double sine'
     fire_rate: 0.2
     shoot: (world, entity) =>
-        world\addEntity SineBullet position: getShootPoint(entity), velocity: Vector 0, -200
-        (world\addEntity SineBullet position: getShootPoint(entity), velocity: Vector 0, -200).sine_movement.antiphase = true
+        world\addEntity SineBullet position: getShootPoint(entity)
+        (world\addEntity SineBullet position: getShootPoint(entity)).sine_movement.antiphase = true
 }
 
 
 Player = Entity {
+    'player'
     hp: 100
     money: 0
     velocity: Vector 0, 0
@@ -119,38 +156,34 @@ Player = Entity {
     shoot_point: Vector 8, 0
     speed: 200
     draw: =>
-        -- lg.setColor GREEN
-        -- lg.polygon 'fill', @position.x, @position.y - 30,
-        --                    @position.x + 20, @position.y + 30,
-        --                    @position.x - 20, @position.y + 30
-        -- lg.draw images.test_ship, @position.x - images.test_ship\getWidth! - 15, @position.y, 0, 4, 4
-        lg.draw images.test_ship, @position.x, @position.y
+        rotation = 0
+        rotation = @velocity.x > 0 and 0.18 or -0.18 if @velocity.x != 0
+        scale = @velocity.x != 0 and 0.9 or 1
+        lg.draw images.test_ship, @position.x + 8, @position.y + 8, rotation, scale, 1, 8, 8
     'is_handles_input'
     'only_on_screen'
-    'player'
-    -- weapon_set: {WeakWeapon!, DoubleAngleWeapon!}
-    weapon_set: {SineWeapon!}
+    weapons: {max_size: 3, set: {weapons.Sine!, weapons.DoubleAngle!}}
     last_shoot_time: 0
 }
 
 Enemy = Entity {
+    'enemy'
     hp: 100
     position: Vector SCREEN_W / 2, SCREEN_H / 2
     velocity: Vector 0, 100
-    bounding_box: w:12, h:12
+    bounding_box: w: images.enemy\getWidth!, h: images.enemy\getHeight!
     draw: =>
-        lg.setColor F.map RED, (k, v) -> return v * (@hp / 100)
-        lg.rectangle 'fill', @position.x, @position.y, 12, 12
-    'enemy'
+        -- lg.setColor F.map RED, (k, v) -> return v * (@hp / 100)
+        -- lg.rectangle 'fill', @position.x, @position.y, 12, 12
+        lg.draw images.enemy, @position.x, @position.y
     'die_in_bottom_of_screen'
     'drops_coins_after_death'
 }
 
-getCenterPosition = -> Vector SCREEN_W / 2, SCREEN_H / 2
-
 Coin = Entity {
     position: getCenterPosition!
     velocity: Vector 0, 0
+    standard_velocity: Vector 0, 20
     max_speed: 500
     acceleration: Vector 0, 0
     bounding_box: w:4, h:4
@@ -158,19 +191,57 @@ Coin = Entity {
     'coin'
     draw: =>
         lg.setColor WHITE
-        -- lg.circle 'line', @position.x + 2, @position.y + 2, 3
         width = 3 * math.sin 5 * @existing_time
         width = 0.1 if -0.1 < width and width < 0.1
         lg.ellipse 'line', @position.x + 2, @position.y + 2, width, 3
 }
 
-EnemySpawner = Entity {
-    spawn_energy: 0
+screenVector = (x, y) -> Vector SCREEN_X0 + x, SCREEN_Y0 + y
+
+getRandomTopPosition = -> screenVector (random 20, SCREEN_W - 20), -50
+
+Wave = Entity {
+    price: 1
+    spawn: (world) =>
+        assert false, 'Invalid spawn wave, need spawn function.'
 }
 
-getRandomTopPosition = -> Vector (random 20, SCREEN_W - 20), -50
+
+waves = {
+    Wave {
+        price: 1
+        spawn: =>
+    }
+    Wave {
+        price: 1
+        spawn: (world) => world\addEntity Enemy position: getRandomTopPosition!
+    }
+    Wave {
+        price: 2
+        spawn: (world) =>
+            world\addEntity Enemy position: screenVector 30, -30
+            world\addEntity Enemy position: screenVector SCREEN_W - 30, -30
+    }
+    Wave {
+        price: 3
+        spawn: (world) =>
+            world\addEntity Enemy position: screenVector(-30 - Enemy.bounding_box.w, -30), velocity: Vector 70, 70
+            world\addEntity Enemy position: screenVector(SCREEN_W + 30, -30), velocity: Vector -70, 70
+    }
+}
+
+EnemySpawner = Entity {
+    spawn_energy: 100
+    waves: waves
+}
 
 systems = {}
+
+systems.listener_init_system = with ECS.system!
+    .filter = ECS.requireAny 'spawn_energy', 'weapons'
+    .onAdd = (e) =>
+        if e.spawn_energy then e.spawn_energy_listener = Talk\listen 'get spawn_energy', -> e.spawn_energy
+        if e.weapons then e.weapons_listener = Talk\listen 'get weapons.set', -> Utils.deepCopy e.weapons.set
 
 systems.collider_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'position', 'bounding_box'
@@ -187,21 +258,21 @@ systems.enemy_collider_system = with ECS.processingSystem!
                 world\removeEntity c.other
 
 systems.weapon_set_manage_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'weapon_set'
+    .filter = ECS.requireAll 'weapons'
     .process = (e) =>
-        for weapon in *e.weapon_set
+        for weapon in *e.weapons.set
             weapon.owner = e
             weapon.world = @world
             @world\addEntity weapon
-    .onRemove = (e) => @world\removeEntity weapon for weapon in *e.weapon_set
+    .onRemove = (e) => @world\removeEntity weapon for weapon in *e.weapons.set
 
-systems.collectable_collider_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'player'
-    .process = (e) =>
-        for c in *collider\getCollisions e
-            if c.other.coin
-                e.money += 1
-                world\removeEntity c.other
+systems.moving_system = with ECS.processingSystem!
+    .onAddToWorld = (world) => world\setSystemIndex @, 1  -- I don't know why, but it fixes shacking on borders.
+    .filter = ECS.requireAll 'position', 'velocity'
+    .process = (e, dt) =>
+        e.position += e.velocity * dt
+        e.velocity += e.acceleration if e.acceleration
+        e.velocity\trimInplace e.max_speed if e.max_speed
 
 systems.only_on_screen_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'only_on_screen', 'position'
@@ -211,13 +282,6 @@ systems.only_on_screen_system = with ECS.processingSystem!
         if e.bounding_box
             e.position.x = (L.clamp e.position.x + e.bounding_box.w, 0, SCREEN_W) - e.bounding_box.w
             e.position.y = (L.clamp e.position.y + e.bounding_box.h, 0, SCREEN_H) - e.bounding_box.h
-
-systems.moving_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'position', 'velocity'
-    .process = (e, dt) =>
-        e.position += e.velocity * dt
-        e.velocity += e.acceleration if e.acceleration
-        e.velocity\trimInplace e.max_speed if e.max_speed
 
 systems.sine_moving_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'sine_movement'
@@ -229,22 +293,46 @@ systems.sine_moving_system = with ECS.processingSystem!
         e.position.x = e.origin_x + x_offset
 
 systems.collectable_moving_system = with ECS.processingSystem!
-    .filter = ECS.requireAny 'collectable', 'player'
+    .filter = ECS.filter 'player|(collectable&max_speed)'
     .onAdd = (e) => @player = e if e.player
     .process = (e, dt) =>
-        if not e.player
+        if e.collectable
             if @player.last_shoot_time > 0.3
-                e.velocity = (@player.position - e.position)\normalizeInplace! * e.max_speed
+                e.velocity = (@player\getCenter! - e.position)\normalizeInplace! * e.max_speed
             else
                 coin_magnet_radius = 30
-                if (@player.position\dist e.position) < coin_magnet_radius
-                    e.velocity = (@player.position - e.position)\normalizeInplace! * 300
+                if (@player\getCenter!\dist e.position) < coin_magnet_radius
+                    e.velocity = (@player\getCenter! - e.position)\normalizeInplace! * 200
                 else
-                    e.velocity\setZero!
+                    e.velocity = e.standard_velocity
+
+addWeapon = (player, weapon) ->
+    if #player.weapons.set < player.weapons.max_size
+        player.weapons.set[#player.weapons.set + 1] = weapon
+    else
+        F.pop player.weapons.set 
+        F.push player.weapons.set, weapon
+
+
+systems.collectable_collider_system = with ECS.processingSystem!
+    .filter = ECS.requireAll 'player'
+    .process = (e) =>
+        for c in *collider\getCollisions e
+            if c.other.coin
+                e.money += 1
+                world\removeEntity c.other
+                Talk\say 'coin collected'
+            if c.other.weapon_pickup
+                addWeapon e, c.other.weapon
+                world\removeEntity c.other
+                Talk\say 'weapon collected'
 
 systems.died_entity_remover_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'hp'
-    .process = (e) => world\removeEntity e if e.hp <= 0
+    .process = (e) =>
+        if e.enemy and e.hp <= 0
+            world\addEntity WeaponPickup position: e.position\clone!, weapon: (L.randomChoice tableToArray weapons)!
+            world\removeEntity e
 
 systems.drops_coin_after_death = with ECS.processingSystem!
     .filter = ECS.requireAll 'drops_coins_after_death'
@@ -268,15 +356,15 @@ systems.input_movement_system = with ECS.processingSystem!
             .y += e.speed if input\down 'down'
 
 systems.input_shoot_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'is_handles_input', 'weapon_set'
+    .filter = ECS.requireAll 'is_handles_input', 'weapons'
     .process = (e, dt) =>
         if input\down 'shoot'
-            weapon\down dt for weapon in *e.weapon_set
+            weapon\down dt for weapon in *e.weapons.set
             e.last_shoot_time = 0 if e.last_shoot_time
         e.last_shoot_time += dt if e.last_shoot_time
 
-        if input\pressed 'debug_key_1' then e.weapon_set[#e.weapon_set + 1] = SineWeapon!
-        if input\pressed 'debug_key_2' then e.weapon_set[#e.weapon_set + 1] = DoubleSineWeapon!
+        if input\pressed 'debug_key_1' then e.weapons[#e.weapons + 1] = weapons.Sine!
+        if input\pressed 'debug_key_2' then e.weapons[#e.weapons + 1] = weapons.DoubleSine!
 
 systems.draw_system = with ECS.processingSystem!
     .is_draw_system = true
@@ -289,13 +377,26 @@ systems.update_timer_system = with ECS.processingSystem!
         e.timer\update dt
         e.existing_time += dt
 
+spawnPossibleWave = (world, waves, energy) ->
+    available_waves = tableToArray(F.select waves, (_, wave) -> wave.price <= energy)
+    chosen_wave = L.randomChoice available_waves
+    if chosen_wave
+        chosen_wave\spawn world
+        return chosen_wave.price
+    return 0
+
 systems.enemy_spawner_system = with ECS.processingSystem!
-    .filter = ECS.requireAll 'spawn_energy'
+    .filter = ECS.requireAll 'spawn_energy', 'waves'
+    .onAdd = (e) =>
+        e.add_energy_listener_by_coin = Talk\listen 'coin collected', -> e.spawn_energy += 0.3
+        e.time_to_next_wave = 0
     .process = (e, dt) =>
         e.spawn_energy += dt
-        if e.spawn_energy > 1 and random! < 1
-            e.spawn_energy -= 1
-            world\addEntity Enemy position: getRandomTopPosition!
+        e.time_to_next_wave -= dt
+
+        if e.time_to_next_wave <= 0
+            e.time_to_next_wave = random 0, 3
+            e.spawn_energy -= spawnPossibleWave @world, e.waves, e.spawn_energy
 
 
 local fps_graph, mem_graph, entity_graph, collider_graph
@@ -309,7 +410,8 @@ updateDebugGraphs = (dt, world, collider) ->
     fps_graph\update dt
     mem_graph\update dt
     entity_graph\update dt, world\getEntityCount!
-    entity_graph.label = 'Entities: ' .. world\getEntityCount! .. '\nCollider: ' .. collider\countItems!
+    entity_graph.label = 'Entities: ' .. world\getEntityCount! .. '\nCollider: ' .. collider\countItems! .. '\nSpawnEnergy: '
+    entity_graph.label ..= L.round(Talk\say'get spawn_energy', .1) if Talk\say 'get spawn_energy'
 
     if input\pressed 'toggle_debug' then DEBUG = L.toggle DEBUG
     if input\pressed 'collect_garbage' then collectgarbage 'collect'
@@ -326,6 +428,20 @@ drawColliderDebug = (collider) ->
     lg.setColor DEBUG_RED
     items = collider\getItems!
     lg.rectangle 'line', collider\getRect i for i in *items
+
+
+drawCurrentWeapons = ->
+    cache_font = lg.getFont!
+    lg.setFont love.graphics.newFont(16)
+    weapons_set = Talk\say 'get weapons.set'
+    weapons_names = for n in *weapons_set do
+        name = n.name
+        name ..= '\n'
+        name
+    lg.print weapons_names, 10, lg.getHeight! - 60
+    lg.setFont cache_font
+
+
 
 
 initInput = ->
@@ -352,7 +468,7 @@ initInput = ->
 
 
 love.load = ->
-    export world = ECS.world Player!, EnemySpawner!
+    export world = ECS.world Player! EnemySpawner!
     addAllSystemsTo = (world, systems) -> world\addSystem v for k, v in pairs systems
     addAllSystemsTo world, systems
 
@@ -374,14 +490,12 @@ love.update = (dt) ->
     updateDebugGraphs dt, world, collider
     if input\pressed 'exit' then love.event.quit!
 
-
 canvas = lg.newCanvas(150, 200)
 canvas\setFilter 'nearest'
 love.draw = ->
     lg.setCanvas canvas
     lg.clear!
     lg.setLineStyle 'rough'
-    -- lg.setColor WHITE
 
     lg.setBackgroundColor DARK_BLUE
 
@@ -394,3 +508,4 @@ love.draw = ->
     lg.draw canvas, 0, 0, 0, 4, 4
 
     drawDebugGraphs! if DEBUG
+    drawCurrentWeapons! if DEBUG
