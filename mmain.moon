@@ -51,6 +51,12 @@ Entity = (components) ->
     components.new = (t = {}) =>
         entity = Utils.deepCopy @
         entity[k] = v for k, v in pairs t
+
+        for i = 1, #t
+            component = t[i]
+            entity[component] = true
+            entity[i] = nil
+
         return entity
     setmetatable components, __call: (t) => @\new t
 
@@ -76,6 +82,7 @@ Weapon = Entity {
 
 WeaponPickup = Entity {
     'weapon_pickup'
+    'die_in_bottom_of_screen'
     position: getCenterPosition!
     velocity: Vector 0, 30
     bounding_box: w: 9, h: 9
@@ -94,11 +101,13 @@ WeaponPickup = Entity {
 Bullet = Entity {
     'bullet'
     'die_in_top_of_screen'
+    position: Vector SCREEN_W / 2, SCREEN_H / 2
 }
 
-NormalBullet = Bullet {
+bullets = {}
+
+bullets.Normal = Bullet {
     power: 20
-    position: Vector SCREEN_W / 2, SCREEN_H / 2
     velocity: Vector 0, -300
     bounding_box: w:3, h:3
     draw: =>
@@ -106,7 +115,12 @@ NormalBullet = Bullet {
         lg.circle 'fill', @position.x + 1.5, @position.y + 1.5, 2
 }
 
-SineBullet = NormalBullet {
+bullets.Side = bullets.Normal {
+    velocity: Vector -200, 0
+    'die_in_side_of_screen'
+}
+
+bullets.Sine = bullets.Normal {
     velocity: Vector 0, -200
     sine_movement: amplitude: 10, period: 0.1
 }
@@ -119,30 +133,40 @@ weapons.Weak = Weapon {
     name: 'weak'
     fire_rate: 0.15
     shoot: (world, entity) =>
-        world\addEntity NormalBullet position: getShootPoint(entity)
+        world\addEntity bullets.Normal position: getShootPoint(entity)
+}
+
+weapons.Side = Weapon {
+    name: 'side'
+    fire_rate: 0.2
+    shoot: (world, entity) =>
+        world\addEntity bullets.Side position: getShootPoint(entity)\moveInplace(0, 5)
+        world\addEntity bullets.Side position: getShootPoint(entity)\moveInplace(0, 10)
+        world\addEntity bullets.Side position: getShootPoint(entity)\moveInplace(0, 5), velocity: Vector 200, 0
+        world\addEntity bullets.Side position: getShootPoint(entity)\moveInplace(0, 10), velocity: Vector 200, 0
 }
 
 weapons.DoubleAngle = Weapon {
     name: 'double angle'
     fire_rate: 0.1
     shoot: (world, entity) =>
-        world\addEntity NormalBullet position: getShootPoint(entity), velocity: NormalBullet.velocity\rotated -0.4
-        world\addEntity NormalBullet position: getShootPoint(entity), velocity: NormalBullet.velocity\rotated 0.4
+        world\addEntity bullets.Normal position: getShootPoint(entity), velocity: bullets.Normal.velocity\rotated -0.4
+        world\addEntity bullets.Normal position: getShootPoint(entity), velocity: bullets.Normal.velocity\rotated 0.4
 }
 
 weapons.Sine = Weapon {
     name: 'sine'
     fire_rate: 0.15
     shoot: (world, entity) =>
-        world\addEntity SineBullet position: getShootPoint(entity)
+        world\addEntity bullets.Sine position: getShootPoint(entity)
 }
 
 weapons.DoubleSine = Weapon {
     name: 'double sine'
     fire_rate: 0.2
     shoot: (world, entity) =>
-        world\addEntity SineBullet position: getShootPoint(entity)
-        (world\addEntity SineBullet position: getShootPoint(entity)).sine_movement.antiphase = true
+        world\addEntity bullets.Sine position: getShootPoint(entity)
+        (world\addEntity bullets.Sine position: getShootPoint(entity)).sine_movement.antiphase = true
 }
 
 
@@ -162,7 +186,8 @@ Player = Entity {
         lg.draw images.test_ship, @position.x + 8, @position.y + 8, rotation, scale, 1, 8, 8
     'is_handles_input'
     'only_on_screen'
-    weapons: {max_size: 3, set: {weapons.Sine!, weapons.DoubleAngle!}}
+    weapons: {max_size: 3, set: {weapons.Weak!, weapons.Weak!}}
+    -- weapons: {max_size: 3, set: {weapons.Sine!, weapons.DoubleAngle!}}
     last_shoot_time: 0
 }
 
@@ -263,7 +288,6 @@ systems.weapon_set_manage_system = with ECS.processingSystem!
         for weapon in *e.weapons.set
             weapon.owner = e
             weapon.world = @world
-            @world\addEntity weapon
     .onRemove = (e) => @world\removeEntity weapon for weapon in *e.weapons.set
 
 systems.moving_system = with ECS.processingSystem!
@@ -339,10 +363,11 @@ systems.drops_coin_after_death = with ECS.processingSystem!
     .onRemove = (e) => world\addEntity Coin position: e.position if e.hp <= 0
 
 systems.die_outside_of_screen_system = with ECS.processingSystem!
-    .filter = ECS.filter 'position&(die_in_top_of_screen|die_in_bottom_of_screen)'
+    .filter = ECS.filter 'position&(die_in_top_of_screen|die_in_bottom_of_screen|die_in_side_of_screen)'
     .process = (e) =>
-        if e.die_in_top_of_screen and e.position.y < 0 or
-           e.die_in_bottom_of_screen and e.position.y > SCREEN_H
+        if e.die_in_top_of_screen and e.position.y < SCREEN_Y0 or
+           e.die_in_bottom_of_screen and e.position.y > SCREEN_H or
+           e.die_in_side_of_screen and ((e.position.x < SCREEN_X0) or (e.position.x > SCREEN_X0 + SCREEN_W))
             @world\removeEntity e
 
 systems.input_movement_system = with ECS.processingSystem!
@@ -390,13 +415,20 @@ systems.enemy_spawner_system = with ECS.processingSystem!
     .onAdd = (e) =>
         e.add_energy_listener_by_coin = Talk\listen 'coin collected', -> e.spawn_energy += 0.3
         e.time_to_next_wave = 0
+        e.time_from_last_pass = 0
     .process = (e, dt) =>
         e.spawn_energy += dt
         e.time_to_next_wave -= dt
+        e.time_from_last_pass += dt
 
         if e.time_to_next_wave <= 0
             e.time_to_next_wave = random 0, 3
             e.spawn_energy -= spawnPossibleWave @world, e.waves, e.spawn_energy
+
+        if e.spawn_energy > 10 and (random 1, 100) < e.time_from_last_pass
+            e.spawn_energy -= 10
+            e.time_from_last_pass = 0
+            e.time_to_next_wave = 0
 
 
 local fps_graph, mem_graph, entity_graph, collider_graph
