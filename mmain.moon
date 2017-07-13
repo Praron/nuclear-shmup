@@ -125,6 +125,29 @@ bullets.Sine = bullets.Normal {
     sine_movement: amplitude: 10, period: 0.1
 }
 
+bullets.Big = Bullet {
+    power: 100
+    'piercing'
+    velocity: Vector 0, -100
+    bounding_box: w: 9, h: 9
+    draw: =>
+        lg.setColor GREEN
+        lg.circle 'fill', @position.x + 4.5, @position.y + 4.5, 4
+        lg.setColor WHITE
+        lg.circle 'line', @position.x + 4.5, @position.y + 4.5, 4
+}
+
+bullets.Fraction = Bullet {
+    power: 15
+    velocity: Vector 0, -300
+    acceleration: -7
+    'die_on_stop'
+    bounding_box: w: 2, h: 2
+    draw: =>
+        lg.setColor WHITE
+        lg.circle 'fill', @position.x + 1, @position.y + 1, 2
+}
+
 getShootPoint = (entity) -> (entity.position + (entity.shoot_point or Vector.zero))\clone!
 
 weapons = {}
@@ -169,6 +192,29 @@ weapons.DoubleSine = Weapon {
         (world\addEntity bullets.Sine position: getShootPoint(entity)).sine_movement.antiphase = true
 }
 
+weapons.Big = Weapon {
+    name: 'big'
+    fire_rate: 0.8
+    shoot: (world, entity) =>
+        world\addEntity bullets.Big position: getShootPoint(entity)\moveInplace -4.5, -4
+}
+
+weapons.Shotgun = Weapon {
+    name: 'shotgun'
+    fire_rate: 0.5
+    shoot: (world, entity) =>
+        for i=1, 10
+            angle = random -0.5, 0.5
+            world\addEntity bullets.Fraction position: getShootPoint(entity), velocity: bullets.Fraction.velocity\rotated(angle)
+}
+
+weapons.Spread = Weapon {
+    name: 'spread'
+    fire_rate: 0.05
+    shoot: (world, entity) =>
+        world\addEntity bullets.Fraction position: getShootPoint(entity), velocity: bullets.Fraction.velocity\rotated(random -0.5, 0.5)
+}
+
 
 Player = Entity {
     'player'
@@ -183,12 +229,11 @@ Player = Entity {
         rotation = 0
         rotation = @velocity.x > 0 and 0.18 or -0.18 if @velocity.x != 0
         scale = @velocity.x != 0 and 0.9 or 1
+        lg.setColor WHITE
         lg.draw images.test_ship, @position.x + 8, @position.y + 8, rotation, scale, 1, 8, 8
     'is_handles_input'
     'only_on_screen'
-    weapons: {max_size: 3, set: {weapons.Weak!, weapons.Weak!}}
-    -- weapons: {max_size: 3, set: {weapons.Sine!, weapons.DoubleAngle!}}
-    last_shoot_time: 0
+    weapons: {max_size: 3, last_shoot_time: 0, set: {weapons.Shotgun!}}    
 }
 
 Enemy = Entity {
@@ -200,6 +245,7 @@ Enemy = Entity {
     draw: =>
         -- lg.setColor F.map RED, (k, v) -> return v * (@hp / 100)
         -- lg.rectangle 'fill', @position.x, @position.y, 12, 12
+        lg.setColor WHITE
         lg.draw images.enemy, @position.x, @position.y
     'die_in_bottom_of_screen'
     'drops_coins_after_death'
@@ -219,6 +265,16 @@ Coin = Entity {
         width = 3 * math.sin 5 * @existing_time
         width = 0.1 if -0.1 < width and width < 0.1
         lg.ellipse 'line', @position.x + 2, @position.y + 2, width, 3
+}
+
+Star = Entity {
+    'background'
+    position: getCenterPosition!
+    velocity: Vector 0, 100
+    'die_in_bottom_of_screen'
+    draw: =>
+        lg.setColor WHITE
+        lg.circle 'fill', @position.x, @position.y, 1
 }
 
 screenVector = (x, y) -> Vector SCREEN_X0 + x, SCREEN_Y0 + y
@@ -295,7 +351,8 @@ systems.moving_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'position', 'velocity'
     .process = (e, dt) =>
         e.position += e.velocity * dt
-        e.velocity += e.acceleration if e.acceleration
+        e.velocity += e.acceleration * dt if type(e.acceleration) == 'table'  -- If acceleration is Vector
+        e.velocity += e.velocity * e.acceleration * dt if type(e.acceleration) == 'number'
         e.velocity\trimInplace e.max_speed if e.max_speed
 
 systems.only_on_screen_system = with ECS.processingSystem!
@@ -306,6 +363,10 @@ systems.only_on_screen_system = with ECS.processingSystem!
         if e.bounding_box
             e.position.x = (L.clamp e.position.x + e.bounding_box.w, 0, SCREEN_W) - e.bounding_box.w
             e.position.y = (L.clamp e.position.y + e.bounding_box.h, 0, SCREEN_H) - e.bounding_box.h
+
+systems.die_on_stop_system = with ECS.processingSystem!
+    .filter = ECS.requireAll 'die_on_stop', 'velocity'
+    .process = (e) => @world\removeEntity e if e.velocity\len2! < .1
 
 systems.sine_moving_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'sine_movement'
@@ -321,7 +382,7 @@ systems.collectable_moving_system = with ECS.processingSystem!
     .onAdd = (e) => @player = e if e.player
     .process = (e, dt) =>
         if e.collectable
-            if @player.last_shoot_time > 0.3
+            if @player.weapons.last_shoot_time > 0.3
                 e.velocity = (@player\getCenter! - e.position)\normalizeInplace! * e.max_speed
             else
                 coin_magnet_radius = 30
@@ -385,13 +446,15 @@ systems.input_shoot_system = with ECS.processingSystem!
     .process = (e, dt) =>
         if input\down 'shoot'
             weapon\down dt for weapon in *e.weapons.set
-            e.last_shoot_time = 0 if e.last_shoot_time
-        e.last_shoot_time += dt if e.last_shoot_time
+            e.weapons.last_shoot_time = 0 if e.weapons.last_shoot_time
+        e.weapons.last_shoot_time += dt if e.weapons.last_shoot_time
 
-        if input\pressed 'debug_key_1' then e.weapons[#e.weapons + 1] = weapons.Sine!
-        if input\pressed 'debug_key_2' then e.weapons[#e.weapons + 1] = weapons.DoubleSine!
-
-systems.draw_system = with ECS.processingSystem!
+systems.draw_system = with ECS.sortedProcessingSystem!
+    .compare = (e1, e2) =>
+        if e1.background and not e2.background  -- It is really bad, but working for now.
+            return true
+        else
+            return false
     .is_draw_system = true
     .filter = ECS.requireAll 'draw'
     .process = (e) => e\draw!
@@ -416,6 +479,8 @@ systems.enemy_spawner_system = with ECS.processingSystem!
         e.add_energy_listener_by_coin = Talk\listen 'coin collected', -> e.spawn_energy += 0.3
         e.time_to_next_wave = 0
         e.time_from_last_pass = 0
+
+        e.timer\every 1, -> @world\addEntity Star position: getRandomTopPosition!, velocity: Vector 0, random 10, 50
     .process = (e, dt) =>
         e.spawn_energy += dt
         e.time_to_next_wave -= dt
