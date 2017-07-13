@@ -1,6 +1,6 @@
 require 'libs/autobatch'
-F = require 'libs/moses'
-L = require 'libs/lume'
+F = require 'libs/moses'  -- F for Functional
+L = require 'libs/lume'  -- L for Lume
 import random from L
 Object = require 'libs/classic'
 Timer = require 'libs/timer'
@@ -12,7 +12,8 @@ Bump = require 'libs/bump'
 DebugGraph = require 'libs/debug_graph'
 BumpDebug = require 'libs/bump_debug'
 Observer = require 'libs/talkback'
-
+Shake = require 'libs/shack'
+-- Pie = (require 'libs/piefiller')\new!
 Utils = require 'libs/utils'
 
 Talk = Observer.new!
@@ -26,6 +27,7 @@ setmetatable _G, __index: require('libs/cargo').init
             image\setFilter 'nearest'
 
 export DEBUG = true
+export SHOW_WEAPONS = true
 
 export SCREEN_X0 = 0
 export SCREEN_Y0 = 0
@@ -138,7 +140,7 @@ bullets.Big = Bullet {
 }
 
 bullets.Fraction = Bullet {
-    power: 15
+    power: 20
     velocity: Vector 0, -300
     acceleration: -7
     'die_on_stop'
@@ -146,6 +148,19 @@ bullets.Fraction = Bullet {
     draw: =>
         lg.setColor WHITE
         lg.circle 'fill', @position.x + 1, @position.y + 1, 2
+}
+
+bullets.Mine = Bullet {
+    power: 100
+    velocity: Vector 0, 10
+    'die_in_bottom_of_screen'
+    bounding_box: w: 8, h: 8
+    magneting_to_enemy: {radius: 32}
+    draw: =>
+        lg.setColor WHITE
+        lg.circle 'fill', @position.x + 4, @position.y + 4, 3
+        lg.setColor RED
+        lg.circle 'line', @position.x + 4, @position.y + 4, 3
 }
 
 getShootPoint = (entity) -> (entity.position + (entity.shoot_point or Vector.zero))\clone!
@@ -196,16 +211,18 @@ weapons.Big = Weapon {
     name: 'big'
     fire_rate: 0.8
     shoot: (world, entity) =>
+        Shake\setShake 4
         world\addEntity bullets.Big position: getShootPoint(entity)\moveInplace -4.5, -4
 }
 
 weapons.Shotgun = Weapon {
     name: 'shotgun'
-    fire_rate: 0.5
+    fire_rate: 1
     shoot: (world, entity) =>
+        Shake\setShake 5
         for i=1, 10
             angle = random -0.5, 0.5
-            world\addEntity bullets.Fraction position: getShootPoint(entity), velocity: bullets.Fraction.velocity\rotated(angle)
+            world\addEntity bullets.Fraction position: getShootPoint(entity), velocity: bullets.Fraction.velocity\rotated(angle) * random 0.7, 1
 }
 
 weapons.Spread = Weapon {
@@ -213,6 +230,14 @@ weapons.Spread = Weapon {
     fire_rate: 0.05
     shoot: (world, entity) =>
         world\addEntity bullets.Fraction position: getShootPoint(entity), velocity: bullets.Fraction.velocity\rotated(random -0.5, 0.5)
+}
+
+weapons.Mines = Weapon {
+    name: 'mines'
+    fire_rate: 0.8
+    shoot: (world, entity) =>
+        world\addEntity bullets.Mine position: getShootPoint(entity)\moveInplace -4, 4
+
 }
 
 
@@ -233,7 +258,7 @@ Player = Entity {
         lg.draw images.test_ship, @position.x + 8, @position.y + 8, rotation, scale, 1, 8, 8
     'is_handles_input'
     'only_on_screen'
-    weapons: {max_size: 3, last_shoot_time: 0, set: {weapons.Shotgun!}}    
+    weapons: {max_size: 3, last_shoot_time: 0, set: {weapons.Mines!}}
 }
 
 Enemy = Entity {
@@ -252,14 +277,15 @@ Enemy = Entity {
 }
 
 Coin = Entity {
+    'coin'
     position: getCenterPosition!
     velocity: Vector 0, 0
-    standard_velocity: Vector 0, 20
+    standard_velocity: Vector 0, 40
     max_speed: 500
     acceleration: Vector 0, 0
     bounding_box: w:4, h:4
+    'die_in_bottom_of_screen'
     'collectable'
-    'coin'
     draw: =>
         lg.setColor WHITE
         width = 3 * math.sin 5 * @existing_time
@@ -351,9 +377,25 @@ systems.moving_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'position', 'velocity'
     .process = (e, dt) =>
         e.position += e.velocity * dt
-        e.velocity += e.acceleration * dt if type(e.acceleration) == 'table'  -- If acceleration is Vector
+        e.velocity += e.acceleration * dt if type(e.acceleration) == 'table'  -- If acceleration is a Vector
         e.velocity += e.velocity * e.acceleration * dt if type(e.acceleration) == 'number'
         e.velocity\trimInplace e.max_speed if e.max_speed
+
+systems.enemy_system = with ECS.system!
+    .filter = ECS.requireAll 'enemy'
+
+systems.magneting_to_enemy_system = with ECS.processingSystem!
+    .filter = ECS.requireAll 'magneting_to_enemy', 'velocity'
+    .process = (e, dt) =>
+        if not e.magneting_to_enemy.target
+            enemies = systems.enemy_system.entities
+            nearest_enemy = F.min enemies, (enemy) -> e.position\dist2 enemy.position
+            if nearest_enemy and (e.position\dist nearest_enemy.position) <= e.magneting_to_enemy.radius
+                e.magneting_to_enemy.target = nearest_enemy
+        else
+            e.velocity = (e.magneting_to_enemy.target.position - e.position)\normalizeInplace! * 100
+            e.magneting_to_enemy.target = nil if e.magneting_to_enemy.target.hp <= 0
+
 
 systems.only_on_screen_system = with ECS.processingSystem!
     .filter = ECS.requireAll 'only_on_screen', 'position'
@@ -418,6 +460,7 @@ systems.died_entity_remover_system = with ECS.processingSystem!
         if e.enemy and e.hp <= 0
             world\addEntity WeaponPickup position: e.position\clone!, weapon: (L.randomChoice tableToArray weapons)!
             world\removeEntity e
+            Shake\setShake 5
 
 systems.drops_coin_after_death = with ECS.processingSystem!
     .filter = ECS.requireAll 'drops_coins_after_death'
@@ -490,8 +533,8 @@ systems.enemy_spawner_system = with ECS.processingSystem!
             e.time_to_next_wave = random 0, 3
             e.spawn_energy -= spawnPossibleWave @world, e.waves, e.spawn_energy
 
-        if e.spawn_energy > 10 and (random 1, 100) < e.time_from_last_pass
-            e.spawn_energy -= 10
+        if e.spawn_energy > 5 and (random 1, 100) < e.time_from_last_pass
+            e.spawn_energy -= 5
             e.time_from_last_pass = 0
             e.time_to_next_wave = 0
 
@@ -579,22 +622,29 @@ love.load = ->
 
 
 love.update = (dt) ->
+    -- Pie\attach!
     world\update dt, ECS.rejectAny 'is_draw_system'
     -- GameState.update dt
 
     global_timer\update dt
 
+    Shake\update dt
+
     updateDebugGraphs dt, world, collider
     if input\pressed 'exit' then love.event.quit!
+    -- Pie\detach!
 
 canvas = lg.newCanvas(150, 200)
 canvas\setFilter 'nearest'
 love.draw = ->
+    -- Pie\draw!
     lg.setCanvas canvas
     lg.clear!
     lg.setLineStyle 'rough'
 
     lg.setBackgroundColor DARK_BLUE
+
+    Shake\apply!
 
     world\update 0, ECS.requireAll 'is_draw_system'
 
@@ -604,5 +654,10 @@ love.draw = ->
     lg.setColor WHITE
     lg.draw canvas, 0, 0, 0, 4, 4
 
+
     drawDebugGraphs! if DEBUG
-    drawCurrentWeapons! if DEBUG
+    drawCurrentWeapons! if SHOW_WEAPONS
+
+-- love.keypressed = (...) -> Pie\keypressed ...
+-- love.mousepressed = (...) -> Pie\mousepressed ...
+
